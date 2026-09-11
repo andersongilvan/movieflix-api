@@ -1,9 +1,4 @@
 import { registerAs } from '@nestjs/config'
+import { postgresConnection } from './postgres.options'
 
-export const databaseConfig = registerAs('database', () => ({
-  host: process.env.DB_HOST || 'localhost',
-  port: Number(process.env.DB_PORT) || 5432,
-  username: process.env.DB_USERNAME || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
-  name: process.env.DB_NAME || 'db_movieflix',
-}))
+export const databaseConfig = registerAs('database', () => postgresConnection())

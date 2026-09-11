@@ -10,12 +10,7 @@ import { databaseConfig } from './database.config'
     TypeOrmModule.forRootAsync({
       inject: [databaseConfig.KEY],
       useFactory: (database: ConfigType<typeof databaseConfig>) => ({
-        type: 'postgres',
-        host: database.host,
-        port: database.port,
-        username: database.username,
-        password: database.password,
-        database: database.name,
+        ...database,
         autoLoadEntities: true,
       }),
     }),
