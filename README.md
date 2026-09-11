@@ -20,6 +20,7 @@ O frontend (ex.: React em `http://localhost:5173`) consome esta API. Contratos d
 - [Documentação da API (frontend)](#documentação-da-api-frontend)
 - [Mapa de rotas](#mapa-de-rotas)
 - [Produção](#produção)
+- [Deploy no Render](#deploy-no-render)
 - [Estrutura do repositório](#estrutura-do-repositório)
 
 ## Stack
@@ -283,6 +284,23 @@ Checklist:
 - Rodar `migration:run` no deploy; nunca ligar `synchronize`
 - Postgres gerenciado (RDS etc.) com SSL se o provedor exigir
 - Helmet já está ativo; mantenha HTTPS na frente (ALB / CloudFront)
+
+## Deploy no Render
+
+Passo a passo completo: [`docs/deploy-render.txt`](docs/deploy-render.txt).
+
+Resumo: o log `ECONNREFUSED 127.0.0.1:5432` aparece quando a migration roda no **Build** sem `DATABASE_URL`.
+
+No Web Service:
+
+| Campo | Valor |
+| --- | --- |
+| Build Command | `npm install && npm run build` |
+| Start Command | `npm run start:render` |
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | Internal Database URL do Postgres do Render |
+
+Não use `localhost`. Não coloque `migration:run` no Build.
 
 ## Estrutura do repositório
 

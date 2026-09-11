@@ -1,0 +1,72 @@
+DEPLOY NO RENDER — O QUE FALTA
+==============================
+
+O log com ECONNREFUSED 127.0.0.1:5432 significa:
+
+  1. A migration rodou no BUILD (antes do app subir).
+  2. DATABASE_URL nao estava no Web Service.
+  3. O codigo caiu no padrao localhost. No Render nao existe Postgres
+     na porta 5432 da maquina de build.
+
+"injected env (0) from .env" so diz que nao ha arquivo .env no servidor
+(normal: .env nao vai no git). As variaveis do painel Render sao outra
+coisa. Se DATABASE_URL estivesse no Web Service, a conexao NAO seria
+127.0.0.1.
+
+
+CHECKLIST (faca nesta ordem)
+----------------------------
+
+A) Postgres no Render
+  Dashboard -> New -> PostgreSQL (mesmo region do Web Service).
+  Espere o status Available.
+
+B) Web Service -> Environment
+  Adicione NESTE servico web (nao so no banco):
+
+  NODE_ENV=production
+  DATABASE_URL=<Internal Database URL>
+
+  O Internal Database URL fica em:
+    Postgres -> Info -> Connections -> Internal Database URL
+  Comeca com postgresql://  e o host parece dpg-xxxxx-a
+  NAO use localhost. NAO use 127.0.0.1.
+
+  Copie tambem JWT_SECRET, EMAIL_*, FRONTEND_URL, etc.
+
+C) Web Service -> Settings -> Build & Deploy
+
+  Build Command  (SEM migration):
+    npm install && npm run build
+
+  Start Command:
+    npm run start:render
+
+  Se o Build Command ainda tiver "npm run migration:run", o deploy
+  continua quebrando igual ao log que voce colou.
+
+D) Git
+  Commit + push da branch que o Render observa (main).
+  No Render: Manual Deploy -> Deploy latest commit.
+
+E) Conferir o log novo
+  Build deve terminar em "nest build" com sucesso, SEM "migration:run".
+  No Start (logs do servico rodando) deve aparecer a migration
+  conectando no host dpg-... e depois "Nest application successfully started".
+
+
+POR QUE NAO MIGRAR NO BUILD
+---------------------------
+O build do Render e outra maquina. O Internal URL do Postgres so
+funciona quando o Web Service JA esta na rede privada (Start).
+Por isso: build so compila; start aplica migration e sobe a API.
+
+
+SE AINDA FALHAR
+---------------
+- Host ainda 127.0.0.1  -> DATABASE_URL nao chegou no Web Service
+                           (typo, variavel no banco e nao no web,
+                           ou deploy do commit antigo)
+- erro SSL              -> confira NODE_ENV=production
+- ts-node not found     -> Start tem que ser start:render / migration:run:prod
+                           nao "npm run migration:run"
