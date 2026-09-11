@@ -1,0 +1,264 @@
+API FRONTEND — RECURSOS DO USUARIO (role USER)
+==============================================
+
+Base URL (dev):  http://localhost:3000
+Content-Type:    application/json
+Auth:            Authorization: Bearer <accessToken>
+
+Cadastro publico nasce com role "user".
+Admin herda tudo desta doc (tambem pode chamar estas rotas).
+
+Complementa:
+  docs/autenticacao.txt
+  docs/recuperacao-senha.txt
+
+
+1. O QUE O USER PODE E NAO PODE
+-------------------------------
+
+Pode (com Bearer access):
+  Filme      GET list/detalhe, POST criar, PATCH editar
+  Categoria  GET list/detalhe, POST criar, PATCH editar
+  Streaming  GET list/detalhe, POST criar, PATCH editar
+  Auth       login, refresh, forgot/reset (ver docs de auth)
+
+Nao pode (403 "Insufficient permissions"):
+  DELETE /movie/:id
+  DELETE /category/:id
+  DELETE /streaming/:id
+  GET    /user
+  GET    /user/:id
+  PATCH  /user/:id
+  PATCH  /user/:id/admin
+  DELETE /user/:id
+
+Nao existe "meu perfil" autenticado alem do objeto user
+devolvido no login/refresh. USER nao lista nem edita contas.
+
+Esconda no React os botoes de excluir catalogo e toda a
+area /admin se user.role === "user".
+
+
+2. HEADER E ERROS COMUNS
+------------------------
+
+Toda rota desta doc (exceto as publicas de auth):
+
+  Authorization: Bearer <accessToken>
+
+401 Unauthorized
+  "Token is required" | "Invalid token" | "User not authenticated"
+  -> tentar refresh; se falhar, login
+  Nao envie o refreshToken neste header.
+
+403 Forbidden
+  "Insufficient permissions"
+  USER tentou rota de admin (ex.: DELETE /movie/:id)
+
+400 Bad Request
+  validacao de body/query, ou :id que nao e UUID
+  message costuma ser array de strings
+  "property X should not exist" = campo extra no JSON
+
+404 Not Found
+  "Movie not found"
+  "Category not found"
+  "Streaming not found"
+  "One or more categories were not found"
+  "One or more streaming platforms were not found"
+
+409 Conflict
+  "A movie with this title already exists"
+
+Formato padrao:
+  {
+    "statusCode": number,
+    "message": string | string[],
+    "error": string
+  }
+
+IDs de path e de relacao: UUID string.
+
+
+3. PAGINACAO
+------------
+
+Usada em GET /movie e GET /streaming (query string).
+GET /category NAO pagina: devolve array completo.
+
+Query (todos opcionais):
+  page    number inteiro >= 1    default 1
+  limit   number inteiro >= 1    default 20
+  search  string                 filtra title (ILIKE, trim;
+                                 vazio/espacos = sem filtro)
+
+Envelope:
+  {
+    "data": T[],
+    "page": number,
+    "limit": number,
+    "total": number,
+    "totalPages": number
+  }
+
+totalPages e 0 se total for 0.
+page=2&limit=10 pula 10 registros (skip = (page-1)*limit).
+
+
+4. CATEGORIAS
+-------------
+
+GET /category
+200  [ { "id": UUID, "title": string } ]
+
+GET /category/:id
+200  { "id": UUID, "title": string }
+
+POST /category
+201
+Request:  { "title": string }     1 a 255 caracteres
+Response: { "id", "title" }
+
+PATCH /category/:id
+200
+Request:  { "title"?: string }    1 a 255, opcional
+Response: { "id", "title" }
+
+USER nao chama DELETE /category/:id.
+
+
+5. STREAMINGS
+-------------
+
+GET /streaming?page=1&limit=20&search=
+200  Pagination de:
+  { "id": UUID, "title": string, "imgUrl": string }
+
+GET /streaming/:id
+200  { "id", "title", "imgUrl" }
+
+POST /streaming
+201
+Request:
+  {
+    "title":  string,  1 a 255
+    "imgUrl": string   1 a 255   URL da logo/imagem
+  }
+Response: { "id", "title", "imgUrl" }
+
+PATCH /streaming/:id
+200
+Request: mesmos campos, todos opcionais
+Response: { "id", "title", "imgUrl" }
+
+USER nao chama DELETE /streaming/:id.
+
+
+6. FILMES
+---------
+
+GET /movie?page=1&limit=20&search=&categoryId=
+  categoryId  UUID opcional  filtra filmes daquela categoria
+
+200  Pagination de filme (ver response abaixo).
+
+GET /movie/:id
+200  um filme
+
+POST /movie
+201
+Request:
+  {
+    "title":             string,   obrigatorio, 1 a 255
+    "description":       string,   opcional
+    "releaseYear":       number,   obrigatorio, inteiro 1888..2100
+    "durationInMinutes": number,   obrigatorio, inteiro >= 1
+    "imgUrl":            string,   obrigatorio, 1 a 255
+    "categoryIds":       UUID[],   opcional, valores unicos (UUID v4)
+    "streamingIds":      UUID[]    opcional, valores unicos (UUID v4)
+  }
+
+description so com espacos vira null no banco.
+categoryIds/streamingIds vazios ou ausentes = filme sem relacoes.
+Se algum UUID nao existir: 404
+  "One or more categories were not found"
+  "One or more streaming platforms were not found"
+Titulo duplicado (unique, case sensitive no banco): 409
+  "A movie with this title already exists"
+
+PATCH /movie/:id
+200
+Body = mesmos campos do POST, todos opcionais.
+Se enviar title, a unicidade ignora o proprio id.
+Se enviar categoryIds ou streamingIds, substitui a lista inteira
+(nao faz merge). Para limpar relacoes, envie [].
+
+Response filme (GET/POST/PATCH):
+  {
+    "id": UUID,
+    "title": string,
+    "description": string | null,
+    "releaseYear": number,
+    "durationInMinutes": number,
+    "imgUrl": string,
+    "categories": [
+      { "id": UUID, "title": string }
+    ],
+    "streamingPlatforms": [
+      { "id": UUID, "title": string, "imgUrl": string }
+    ]
+  }
+
+USER nao chama DELETE /movie/:id.
+
+
+7. FLUXO SUGERIDO NO APP USER
+-----------------------------
+
+1. Login -> guardar user.role, accessToken, refreshToken.
+2. Home/catalogo:
+     GET /movie?page=1&limit=20
+     GET /category          (filtros)
+     GET /streaming?limit=20
+3. Filtro por categoria: GET /movie?categoryId=<uuid>
+4. Busca: GET /movie?search=inception
+5. Detalhe: GET /movie/:id
+6. Criar/editar filme (se a UI permitir a USER):
+     carregar categorias e streamings
+     POST ou PATCH com categoryIds e streamingIds
+7. Em 401: POST /auth/refresh-token; repetir a request.
+8. Nao mostrar exclusao nem tela de usuarios.
+
+
+8. EXEMPLOS
+-----------
+
+Listar filmes
+  GET /movie?page=1&limit=20
+  Authorization: Bearer <accessToken>
+
+Filtrar
+  GET /movie?categoryId=3fa85f64-5717-4562-b3fc-2c963f66afa6&search=batman
+
+Criar filme
+  POST /movie
+  {
+    "title": "Inception",
+    "description": "A dream within a dream",
+    "releaseYear": 2010,
+    "durationInMinutes": 148,
+    "imgUrl": "https://example.com/inception.jpg",
+    "categoryIds": ["...uuid-sci-fi..."],
+    "streamingIds": ["...uuid-netflix..."]
+  }
+
+Editar so o titulo
+  PATCH /movie/<uuid>
+  { "title": "Inception (2010)" }
+
+Criar categoria
+  POST /category
+  { "title": "Sci-Fi" }
+
+Listar streamings
+  GET /streaming?page=1&search=net

@@ -1,0 +1,232 @@
+  API FRONTEND — IMPLEMENTACAO DA RECUPERACAO DE SENHA
+  ====================================================
+
+  Base URL (dev):  http://localhost:3000
+  Frontend (dev):  http://localhost:5173
+  Content-Type:    application/json
+  Auth:            nenhuma (rotas publicas, NAO enviar Authorization)
+
+  FRONTEND_URL no backend deve ser a origem do React
+  (ex.: http://localhost:5173). Esse valor entra no link do e-mail
+  e no CORS.
+
+
+  1. O QUE O BACKEND JA FAZ
+  -------------------------
+
+  1. Usuario pede reset (e-mail).
+  2. Se a conta existir, a API gera um token cru (hex, 64 chars),
+    guarda so o SHA-256 no banco, invalida tokens anteriores
+    e envia e-mail HTML com o botao/link:
+      {FRONTEND_URL}/auth/reset-password?token=<token>
+  3. Token vale 30 minutos e e de uso unico.
+  4. Usuario abre o link, o React le ?token= e envia a senha nova.
+  5. A API troca a senha (bcrypt) e marca o token como usado.
+  6. Nao devolve JWT. Depois do reset, o usuario faz login.
+
+
+  2. TELAS E ROTAS NO REACT
+  -------------------------
+
+  Precisa de duas rotas (React Router):
+
+    /auth/forgot-password     formulario de e-mail
+    /auth/reset-password      formulario de senha nova
+                              le o query param "token"
+
+  O path /auth/reset-password e OBRIGATORIO: e o que vai no e-mail.
+  Nao use /reset-password sem o prefixo /auth, senao o link do
+  e-mail cai em 404 no frontend.
+
+  Exemplo (React Router v6):
+
+    <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
+    <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
+
+  Na pagina de reset:
+
+    const [searchParams] = useSearchParams()
+    const token = searchParams.get('token') ?? ''
+
+  Se token estiver vazio, mostre erro e um link para
+  /auth/forgot-password. Nao chame a API ainda.
+
+
+  3. PASSO 1 — PEDIR O E-MAIL
+  ---------------------------
+
+  Tela: "Esqueci minha senha"
+  Campos: email
+  Botao: enviar
+
+  POST /auth/forgot-password
+  Status sucesso: 200 OK (body vazio — response.data e "")
+
+  Request:
+    {
+      "email": string    obrigatorio, e-mail valido
+    }
+
+  Axios:
+    await api.post('/auth/forgot-password', { email })
+
+  Comportamento importante:
+    A API SEMPRE responde 200, mesmo se o e-mail nao existir.
+    Nao tente descobrir se a conta existe pelo status.
+
+  UI depois do 200:
+    "Se este e-mail estiver cadastrado, enviamos um link.
+    Verifique a caixa de entrada (e o spam). O link expira
+    em 30 minutos."
+
+  Nao redirecione para o reset. O usuario so chega la pelo e-mail.
+
+  Erros 400 (validacao), message e array:
+    {
+      "statusCode": 400,
+      "message": ["email must be an email"],
+      "error": "Bad Request"
+    }
+
+  Mostre a message[0] no campo e-mail.
+
+
+  4. PASSO 2 — E-MAIL
+  -------------------
+
+  Assunto: Password reset
+  O HTML tem um botao "Cadastrar nova senha" apontando para:
+
+    http://localhost:5173/auth/reset-password?token=abc123...
+
+  O token e longo (64 hex). Copie a string INTEIRA, inclusive se
+  houver quebra visual no cliente de e-mail.
+
+  Em dev o e-mail cai no Mailtrap (sandbox SMTP do .env), nao
+  na caixa real do usuario.
+
+
+  5. PASSO 3 — CADASTRAR NOVA SENHA
+  ---------------------------------
+
+  Tela: "Redefinir senha" em /auth/reset-password?token=...
+  Campos: newPassword, confirmPassword (confirm e so no front)
+  Botao: salvar
+
+  Regras da senha (iguais ao cadastro):
+    string, 8 a 20 caracteres
+
+  O confirmPassword NAO vai para a API. Compare no React:
+    if (newPassword !== confirmPassword) erro local
+
+  POST /auth/reset-password
+  Status sucesso: 200 OK (body vazio)
+
+  Request:
+    {
+      "token":       string    obrigatorio, searchParams.get('token')
+      "newPassword": string    obrigatorio, 8 a 20 chars
+    }
+
+  Axios:
+    await api.post('/auth/reset-password', { token, newPassword })
+
+  Nao envie email, name, nem Authorization.
+
+  Apos 200:
+    1. mensagem de sucesso
+    2. redirecionar para /login (ou /auth/login, a rota de login do app)
+    3. usuario entra com e-mail + senha nova
+
+  Reset NAO autentica. Nao espere accessToken/refreshToken.
+
+
+  6. ERROS DO RESET
+  -----------------
+
+  Formato:
+    {
+      "statusCode": 400,
+      "message": string | string[],
+      "error": "Bad Request"
+    }
+
+  Validacao (message e array), exemplos:
+    - "token should not be empty"
+    - "newPassword must be longer than or equal to 8 characters"
+    - "newPassword must be shorter than or equal to 20 characters"
+    - "property confirmPassword should not exist"
+      (nao envie campos extras; a API usa forbidNonWhitelisted)
+
+  Token ruim (message e STRING unica):
+    "Invalid or expired token"
+
+    Significa: token inventado, alterado, ja usado, ou com mais
+    de 30 minutos. Nao da para reutilizar o mesmo link.
+
+  UI: mostre a mensagem e um botao
+    "Pedir novo link" -> /auth/forgot-password
+
+
+  7. FLUXO COMPLETO
+  -----------------
+
+    [Login] --"Esqueci a senha"--> [Forgot]
+                                        |
+                                        | POST /auth/forgot-password { email }
+                                        | 200 sempre
+                                        v
+                                  [Cheque o e-mail]
+                                        |
+                                        | clique no link
+                                        v
+        /auth/reset-password?token=... [Reset]
+                                        |
+                                        | POST /auth/reset-password
+                                        |   { token, newPassword }
+                                        |
+                      200 --------------+-------------- 400
+                      |                                 |
+                      v                                 v
+                    [Login]                    token invalido/expirado
+                                              ou senha fora do tamanho
+
+
+  8. CHECKLIST DE IMPLEMENTACAO
+  -----------------------------
+
+    [ ] Rota /auth/forgot-password com input email
+    [ ] POST /auth/forgot-password, tratar 200 como sucesso generico
+    [ ] Rota EXATA /auth/reset-password
+    [ ] Ler token de useSearchParams().get('token')
+    [ ] Bloquear submit se nao houver token
+    [ ] Campos newPassword + confirmacao local (8 a 20)
+    [ ] POST so com { token, newPassword }
+    [ ] 200 -> ir para login
+    [ ] 400 "Invalid or expired token" -> pedir novo e-mail
+    [ ] Nao enviar Bearer nessas duas calls
+    [ ] FRONTEND_URL da API = origem do Vite (reiniciar o Nest
+        depois de mudar .env; watch nao recarrega .env)
+
+
+  9. EXEMPLOS
+  -----------
+
+  Forgot
+    POST http://localhost:3000/auth/forgot-password
+    { "email": "ada@example.com" }
+    -> 200
+
+  Reset
+    POST http://localhost:3000/auth/reset-password
+    { "token": "a1b2c3...", "newPassword": "novaSenha12" }
+    -> 200
+
+  Axios (baseURL = http://localhost:3000):
+
+    // ForgotPasswordPage
+    await api.post('/auth/forgot-password', { email })
+
+    // ResetPasswordPage
+    const token = new URLSearchParams(window.location.search).get('token')
+    await api.post('/auth/reset-password', { token, newPassword })

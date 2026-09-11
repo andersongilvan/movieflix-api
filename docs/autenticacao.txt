@@ -1,0 +1,318 @@
+API FRONTEND — AUTENTICACAO, CONTA E RECUPERACAO DE SENHA
+==========================================================
+
+Base URL (dev):  http://localhost:3000
+Content-Type:    application/json
+Charset:         UTF-8
+
+Esta API nao usa cookies. O frontend guarda os tokens (ex.: memory +
+localStorage) e envia o access token no header Authorization.
+
+Rotas publicas (nao enviam Authorization):
+  POST /user/register
+  POST /auth/login
+  POST /auth/forgot-password
+  POST /auth/reset-password
+  POST /auth/refresh-token
+
+Demais rotas exigem:
+  Authorization: Bearer <accessToken>
+
+
+1. CONVENCOES
+-------------
+
+1.1 Body
+  Sempre JSON. Campos extras no body geram 400 (forbidNonWhitelisted).
+  Campos desconhecidos nao sao aceitos.
+
+1.2 Datas / IDs
+  IDs de usuario: UUID string.
+  Tokens JWT: string (nao UUID).
+  Token de reset de senha: string hex (64 caracteres).
+
+1.3 Papeis (role)
+  "user"   — usuario padrao
+  "admin"  — herda tudo de user e acessa rotas administrativas
+
+1.4 Tokens
+  accessToken
+    - tipo interno: "access"
+    - duracao: 300 segundos (5 minutos)
+    - usar nas rotas protegidas (header Authorization)
+    - NAO enviar no POST /auth/refresh-token
+
+  refreshToken
+    - tipo interno: "refresh"
+    - duracao: 604800 segundos (7 dias)
+    - usar SOMENTE no body de POST /auth/refresh-token
+    - o AuthGuard rejeita refresh no header Bearer (401)
+
+  Quando o access expirar: chamar POST /auth/refresh-token com o refresh.
+  A resposta devolve um PAR NOVO (access + refresh). Substitua os dois.
+  Quando o refresh expirar: voltar para o login (email/senha).
+
+
+2. FORMATOS DE ERRO
+-------------------
+
+Todos os erros seguem o formato NestJS:
+
+  {
+    "statusCode": number,
+    "message": string | string[],
+    "error": string
+  }
+
+400 Bad Request  (validacao)
+  "error": "Bad Request"
+  "message": array de strings, uma por campo invalido.
+  Exemplos de message:
+    - "email must be an email"
+    - "name must be longer than or equal to 3 characters"
+    - "password must be longer than or equal to 8 characters"
+    - "password must be shorter than or equal to 20 characters"
+    - "property foo should not exist"
+    - "token should not be empty"
+    - "Invalid or expired token"     (reset de senha; message e string unica)
+
+401 Unauthorized
+  "error": "Unauthorized"
+  "message" (string):
+    - "Invalid credentials"          login: email inexistente ou senha errada
+                                     (a API nao diferencia os dois casos)
+    - "Invalid token"                JWT ausente/malformado/expirado, ou
+                                     refresh usado como Bearer, ou access
+                                     usado no endpoint de refresh
+    - "Token is required"            header Authorization sem Bearer token
+    - "User not authenticated"       usuario do token nao existe mais
+
+403 Forbidden
+  "error": "Forbidden"
+  "message": "Insufficient permissions"
+  Usuario autenticado sem o papel exigido (ex.: user tentando rota de admin).
+
+409 Conflict
+  "error": "Conflict"
+  "message": "User already exists"
+  Cadastro (ou update admin) com e-mail ja cadastrado.
+
+204 No Content
+  Sem body. Usado em alguns DELETE protegidos, nao nas rotas deste documento.
+
+Respostas 200/201 de sucesso deste documento:
+  login / refresh  -> JSON com user + tokens
+  register         -> JSON do usuario (sem senha)
+  forgot-password  -> 200 com body vazio
+  reset-password   -> 200 com body vazio
+
+
+3. CRIACAO DE CONTA
+-------------------
+
+POST /user/register
+Auth: publica
+Status sucesso: 201 Created
+
+Request body:
+  {
+    "name":     string,   obrigatorio, 3 a 255 caracteres
+    "email":    string,   obrigatorio, e-mail valido
+    "password": string,   obrigatorio, 8 a 20 caracteres
+  }
+
+Response 201:
+  {
+    "id":    string (UUID),
+    "name":  string,
+    "email": string,
+    "role":  "user" | "admin"     // cadastro sempre nasce como "user"
+  }
+
+A senha NUNCA volta na resposta.
+
+Erros:
+  400  campos invalidos (ver secao 2)
+  409  e-mail ja existe ("User already exists")
+
+Fluxo sugerido no frontend:
+  1. POST /user/register
+  2. em seguida POST /auth/login com o mesmo email/password
+     (o register NAO devolve tokens)
+
+
+4. LOGIN
+--------
+
+POST /auth/login
+Auth: publica
+Status sucesso: 200 OK
+
+Request body:
+  {
+    "email":    string,   obrigatorio, e-mail valido
+    "password": string,   obrigatorio, nao vazio
+  }
+
+Response 200:
+  {
+    "user": {
+      "id":    string (UUID),
+      "name":  string,
+      "email": string,
+      "role":  "user" | "admin"
+    },
+    "accessToken":  string,
+    "refreshToken": string
+  }
+
+Erros:
+  400  campos invalidos
+  401  "Invalid credentials"
+
+Guardar accessToken e refreshToken. Enviar apenas o access nas APIs:
+
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+
+5. REFRESH TOKEN
+----------------
+
+POST /auth/refresh-token
+Auth: publica (o token vai no BODY, nao no header)
+Status sucesso: 200 OK
+
+Request body:
+  {
+    "refreshToken": string    obrigatorio, nao vazio
+  }
+
+Response 200: mesmo formato do login
+  {
+    "user": { "id", "name", "email", "role" },
+    "accessToken":  string,
+    "refreshToken": string
+  }
+
+Erros:
+  400  refreshToken ausente/invalido (validacao)
+  401  "Invalid token"              JWT invalido, expirado ou type != refresh
+  401  "User not authenticated"     usuario do sub nao existe
+
+Fluxo sugerido:
+  1. Chamar API protegida
+  2. Se 401 e houver refreshToken valido, POST /auth/refresh-token
+  3. Salvar o novo par e repetir a request original
+  4. Se o refresh tambem falhar (401), limpar sessao e ir para o login
+
+Nao envie o accessToken neste endpoint. Nao envie Authorization.
+
+
+6. RECUPERACAO DE SENHA
+-----------------------
+
+6.1 Pedir o e-mail (forgot)
+
+POST /auth/forgot-password
+Auth: publica
+Status sucesso: 200 OK (body vazio)
+
+Request body:
+  {
+    "email": string    obrigatorio, e-mail valido
+  }
+
+Comportamento:
+  - Sempre 200, mesmo se o e-mail nao existir (nao revela se a conta existe).
+  - Se existir, a API envia um e-mail com link:
+      {FRONTEND_URL}/auth/reset-password?token=<token>
+    FRONTEND_URL padrao de dev: http://localhost:3000
+  - O token do link e de USO UNICO e vale 30 minutos.
+  - Um novo pedido invalida o token anterior ainda nao usado.
+
+Erros:
+  400  e-mail invalido
+
+O frontend precisa expor a rota /auth/reset-password e ler o query param
+"token".
+
+6.2 Cadastrar a nova senha (reset)
+
+POST /auth/reset-password
+Auth: publica
+Status sucesso: 200 OK (body vazio)
+
+Request body:
+  {
+    "token":       string    obrigatorio, valor do query param ?token=
+    "newPassword": string    obrigatorio, 8 a 20 caracteres
+  }
+
+Erros:
+  400  validacao dos campos
+  400  "Invalid or expired token"
+       token inexistente, ja usado, adulterado ou com mais de 30 min
+
+Apos 200, redirecionar para o login. O usuario entra com a senha nova.
+Reset NAO autentica e NAO devolve tokens.
+
+
+7. AUTORIZACAO NAS DEMAIS ROTAS
+-------------------------------
+
+Header obrigatorio:
+  Authorization: Bearer <accessToken>
+
+Se faltar o header:           401  "Token is required"
+Se o token for refresh:       401  "Invalid token"
+Se o access estiver expirado: 401  "Invalid token"  -> usar refresh
+
+Papeis por area (resumo para o frontend):
+
+  USER (e ADMIN, porque admin herda user)
+    CRUD de movie, category, streaming
+    EXCETO delete de movie e delete de streaming (so admin)
+
+  ADMIN somente
+    DELETE /movie/:id
+    DELETE /streaming/:id
+    DELETE /category/:id
+    GET    /user
+    GET    /user/:id
+    PATCH  /user/:id
+    PATCH  /user/:id/admin
+    DELETE /user/:id
+
+  Sem autenticacao
+    rotas da secao inicial deste arquivo
+
+403 "Insufficient permissions" = usuario logado sem o papel certo.
+Nao confundir com 401 (nao autenticado / token ruim).
+
+
+8. EXEMPLOS RAPIDOS
+-------------------
+
+Cadastro
+  POST /user/register
+  { "name": "Ada Lovelace", "email": "ada@example.com", "password": "secret123" }
+
+Login
+  POST /auth/login
+  { "email": "ada@example.com", "password": "secret123" }
+
+Chamada autenticada
+  GET /movie
+  Authorization: Bearer <accessToken>
+
+Refresh
+  POST /auth/refresh-token
+  { "refreshToken": "<refreshToken>" }
+
+Forgot
+  POST /auth/forgot-password
+  { "email": "ada@example.com" }
+
+Reset (token vem da URL /auth/reset-password?token=...)
+  POST /auth/reset-password
+  { "token": "<token-da-url>", "newPassword": "novaSenha12" }

@@ -1,0 +1,216 @@
+API FRONTEND — RECURSOS DO ADMIN (role ADMIN)
+=============================================
+
+Base URL (dev):  http://localhost:3000
+Content-Type:    application/json
+Auth:            Authorization: Bearer <accessToken>   (sempre nestas rotas)
+
+Cadastro publico sempre nasce como "user".
+So um ADMIN promove outro usuario. Nao existe rebaixar para "user".
+
+Admin HERDA tudo de docs/usuario.txt (criar/editar filme,
+categoria e streaming). Esta doc cobre o que e exclusivo da
+pagina administrativa.
+
+Complementa:
+  docs/autenticacao.txt
+  docs/usuario.txt
+
+
+1. COMO O FRONT LIBERA A AREA ADMIN
+-----------------------------------
+
+Login / refresh devolve:
+
+  user.role = "user" | "admin"
+
+  - "admin" -> renderizar /admin
+  - "user"  -> esconder /admin e redirecionar
+               (a API tambem bloqueia com 403)
+
+Nao existe endpoint "sou admin?". Use o role do login.
+Se quiser confirmar: GET /user
+  200 = admin
+  403 = user autenticado
+  401 = sem token / token ruim
+
+
+2. O QUE E EXCLUSIVO DE ADMIN
+-----------------------------
+
+Usuarios
+  GET    /user
+  GET    /user/:id
+  PATCH  /user/:id
+  PATCH  /user/:id/admin
+  DELETE /user/:id
+
+Catalogo (so exclusao; o resto esta em docs/usuario.txt)
+  DELETE /movie/:id
+  DELETE /category/:id
+  DELETE /streaming/:id
+
+Continua publico (sem Bearer):
+  POST /user/register
+  rotas /auth/*  (login, refresh, forgot, reset)
+
+
+3. HEADER E ERROS
+-----------------
+
+  Authorization: Bearer <accessToken>
+
+Nao envie refresh no header. Em 401, POST /auth/refresh-token
+e repita a request (ver docs/autenticacao.txt).
+
+Formato:
+  {
+    "statusCode": number,
+    "message": string | string[],
+    "error": string
+  }
+
+400 Bad Request
+  :id que nao e UUID
+  body invalido / campo extra
+  "property password should not exist"
+  "property role should not exist"
+
+401 Unauthorized
+  "Token is required" | "Invalid token" | "User not authenticated"
+
+403 Forbidden
+  "Insufficient permissions"
+  token de um USER nestas rotas
+
+404 Not Found
+  "User not found"
+  "Movie not found"
+  "Category not found"
+  "Streaming not found"
+
+409 Conflict
+  "User already exists"   e-mail duplicado no PATCH /user/:id
+
+204 No Content
+  DELETE com sucesso: body vazio. Nao faca response.json().
+
+
+4. USUARIOS
+-----------
+
+IDs: UUID.
+GET /user nao pagina; lista ordenada por name ASC.
+Senha NUNCA volta nas respostas.
+PATCH /user/:id NAO altera senha nem role.
+Role so muda em PATCH /user/:id/admin (somente para "admin").
+
+Objeto usuario:
+  {
+    "id":    string (UUID),
+    "name":  string,
+    "email": string,
+    "role":  "user" | "admin"
+  }
+
+4.1 Listar
+
+GET /user
+200  array de usuario
+
+4.2 Detalhe
+
+GET /user/:id
+200  um usuario
+404  "User not found"
+400  UUID invalido
+
+4.3 Atualizar nome / e-mail
+
+PATCH /user/:id
+200
+
+Request (todos opcionais):
+  {
+    "name":  string,   3 a 255 caracteres
+    "email": string    e-mail valido
+  }
+
+Nao enviar password nem role (400).
+
+Erros: 400, 404, 409 "User already exists"
+
+4.4 Promover a admin
+
+PATCH /user/:id/admin
+200
+Body: nenhum. Nao envie { "role": "admin" }.
+
+Response: usuario com "role": "admin"
+
+Se ja for admin, ainda devolve 200 com role admin.
+Nao existe rota para voltar a "user".
+
+4.5 Remover
+
+DELETE /user/:id
+204  body vazio
+404  "User not found"
+
+
+5. EXCLUSOES DE CATALOGO
+------------------------
+
+Mesmo Bearer. Path :id = UUID.
+
+DELETE /movie/:id
+DELETE /category/:id
+DELETE /streaming/:id
+
+204 No Content
+
+Erros: 400 UUID, 401, 403, 404 com as messages da secao 3.
+
+GET/POST/PATCH desses recursos: docs/usuario.txt
+(admin pode usa-los normalmente).
+
+
+6. FLUXO DA PAGINA ADMIN
+------------------------
+
+1. Login. Se user.role !== "admin", nao entrar em /admin.
+2. Dashboard:
+     GET /user
+     GET /movie
+     GET /category
+     GET /streaming
+3. Promover: PATCH /user/:id/admin (sem body).
+4. Editar conta: PATCH /user/:id { name, email }.
+5. Excluir usuario ou item de catalogo: DELETE; tratar 204.
+6. Criar/editar filme, categoria, streaming: mesma API do USER.
+7. 401 -> refresh; se falhar, logout.
+
+
+7. EXEMPLOS
+-----------
+
+Listar usuarios
+  GET /user
+  Authorization: Bearer <accessToken>
+
+Promover
+  PATCH /user/3fa85f64-5717-4562-b3fc-2c963f66afa6/admin
+  Authorization: Bearer <accessToken>
+  (sem body)
+
+Editar e-mail
+  PATCH /user/3fa85f64-5717-4562-b3fc-2c963f66afa6
+  { "email": "ada.admin@example.com" }
+
+Excluir usuario
+  DELETE /user/3fa85f64-5717-4562-b3fc-2c963f66afa6
+  -> 204
+
+Excluir filme
+  DELETE /movie/3fa85f64-5717-4562-b3fc-2c963f66afa6
+  -> 204
